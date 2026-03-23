@@ -1,0 +1,5 @@
+{
+  "name": "Cricket Team Tracker",
+  "description": "A comprehensive cricket match and innings tracker with real-time player statistics, bowler tracking, and tournament management, featuring a vibrant Cyan Neon UI.",
+  "requestFramePermissions": []
+}
