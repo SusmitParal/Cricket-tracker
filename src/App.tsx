@@ -16,15 +16,20 @@ import {
   AlertCircle,
   TrendingUp,
   User,
-  Settings2
+  Settings2,
+  Share2,
+  Copy,
+  Check
 } from 'lucide-react';
 import type { Match, Ball, Player } from './types';
 import History from './components/History';
+import LiveScoreboard from './components/LiveScoreboard';
 
 export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [matches, setMatches] = useState<Match[]>([]);
   const [selectedMatchId, setSelectedMatchId] = useState<number | null>(null);
+  const [isLiveView, setIsLiveView] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -57,6 +62,15 @@ export default function App() {
 
   useEffect(() => {
     fetchMatches();
+    
+    const path = window.location.pathname;
+    if (path.startsWith('/live/')) {
+      const matchId = parseInt(path.split('/')[2]);
+      if (!isNaN(matchId)) {
+        setSelectedMatchId(matchId);
+        setIsLiveView(true);
+      }
+    }
     
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}`);
@@ -99,6 +113,7 @@ export default function App() {
       return;
     }
     const newMatch = await res.json();
+    setMatches(prev => [newMatch, ...prev]);
     setSelectedMatchId(newMatch.id);
     setShowSetup(false);
   };
@@ -177,14 +192,20 @@ export default function App() {
       </header>
 
       <main>
-        {selectedMatchId ? (
+        {isLiveView && selectedMatch ? (
+          <LiveScoreboard match={selectedMatch} />
+        ) : (selectedMatchId && selectedMatch) ? (
           <MatchDashboard 
-            match={selectedMatch!} 
+            match={selectedMatch} 
             onBack={() => {
               setSelectedMatchId(null);
               fetchMatches();
             }} 
           />
+        ) : selectedMatchId ? (
+          <div className="flex items-center justify-center p-20">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-neon-cyan"></div>
+          </div>
         ) : (
           <div className="space-y-8">
             <section>
@@ -553,6 +574,8 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
   const [showBowlerSelect, setShowBowlerSelect] = useState(false);
   const [showScorecard, setShowScorecard] = useState(false);
   const [showStatsModal, setShowStatsModal] = useState(false);
+  const [showWicketSelect, setShowWicketSelect] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [showSetupModal, setShowSetupModal] = useState(true);
   const [currentBatsmanId, setCurrentBatsmanId] = useState<number | null>(null);
   const [currentBowlerId, setCurrentBowlerId] = useState<number | null>(null);
@@ -775,14 +798,21 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
         >
           <Undo2 size={14} /> Back to Dashboard
         </button>
-        {isMatchOver ? (
+        <div className="flex items-center gap-4">
           <button 
-            onClick={declareResult}
-            className="text-[10px] uppercase font-black tracking-widest text-neon-cyan border border-neon-cyan/30 px-4 py-1 rounded-full hover:bg-neon-cyan hover:text-brutal-black transition-all"
+            onClick={() => setShowShareModal(true)}
+            className="flex items-center gap-2 text-[10px] uppercase font-black tracking-widest text-neon-cyan border border-neon-cyan/30 px-4 py-1 rounded-full hover:bg-neon-cyan hover:text-brutal-black transition-all"
           >
-            Declare Result
+            <Share2 size={12} /> Share Live URL
           </button>
-        ) : isInningsOver ? (
+          {isMatchOver ? (
+            <button 
+              onClick={declareResult}
+              className="text-[10px] uppercase font-black tracking-widest text-neon-cyan border border-neon-cyan/30 px-4 py-1 rounded-full hover:bg-neon-cyan hover:text-brutal-black transition-all"
+            >
+              Declare Result
+            </button>
+          ) : isInningsOver ? (
           <button 
             onClick={switchInnings}
             className="text-[10px] uppercase font-black tracking-widest text-neon-cyan border border-neon-cyan/30 px-4 py-1 rounded-full hover:bg-neon-cyan hover:text-brutal-black transition-all"
@@ -797,6 +827,7 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
             Finish Match Early
           </button>
         )}
+        </div>
       </div>
 
       <div className="bg-neon-cyan/5 border border-neon-cyan/20 p-3 rounded-xl flex items-center gap-3">
@@ -929,7 +960,7 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
           </div>
           <div className="flex flex-col gap-2">
             <button 
-              onClick={() => addBall({ runs: 0, wicket_type: 'Bowled' })}
+              onClick={() => setShowWicketSelect(true)}
               className="flex-1 bg-red-600 text-white rounded-xl font-black uppercase tracking-widest text-lg hover:bg-red-700 shadow-[0_0_20px_rgba(220,38,38,0.4)] transition-all active:scale-95"
             >
               WICKET
@@ -1150,8 +1181,104 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
             title="Select Bowler"
           />
         )}
+        {showWicketSelect && (
+          <WicketSelectModal 
+            onSelect={(type) => {
+              addBall({ runs: 0, wicket_type: type });
+              setShowWicketSelect(false);
+            }}
+          />
+        )}
+        {showShareModal && (
+          <ShareModal 
+            matchId={match.id}
+            onClose={() => setShowShareModal(false)}
+          />
+        )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function WicketSelectModal({ onSelect }: { onSelect: (type: string) => void }) {
+  const types = ['Bowled', 'Caught', 'LBW', 'Run Out', 'Stumped', 'Hit Wicket', 'Handled Ball', 'Timed Out'];
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4"
+    >
+      <motion.div 
+        initial={{ scale: 0.9, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+        className="bg-brutal-black border border-neon-cyan p-8 rounded-3xl w-full max-w-md shadow-[0_0_50px_rgba(0,255,255,0.2)]"
+      >
+        <h2 className="font-serif text-3xl mb-6 italic text-neon-cyan">Select Wicket Type</h2>
+        <div className="grid grid-cols-2 gap-3">
+          {types.map(t => (
+            <button 
+              key={t}
+              onClick={() => onSelect(t)}
+              className="p-4 text-center border border-white/10 rounded-xl hover:bg-neon-cyan hover:text-brutal-black transition-all font-bold"
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => onSelect('')} className="w-full mt-4 py-2 text-white/40 uppercase text-[10px] tracking-widest">Cancel</button>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function ShareModal({ matchId, onClose }: { matchId: number, onClose: () => void }) {
+  const url = `${window.location.origin}/live/${matchId}`;
+  const [copied, setCopied] = useState(false);
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4"
+    >
+      <motion.div 
+        initial={{ scale: 0.9, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+        className="bg-brutal-black border border-neon-cyan p-8 rounded-3xl w-full max-w-md shadow-[0_0_50px_rgba(0,255,255,0.2)]"
+      >
+        <h2 className="font-serif text-3xl mb-4 italic text-neon-cyan">Share Live Scoreboard</h2>
+        <p className="text-white/60 text-sm mb-6">Share this URL with players to view live scores on their phones.</p>
+        
+        <div className="bg-white/5 border border-white/10 p-4 rounded-xl flex items-center gap-3 mb-6">
+          <input 
+            readOnly 
+            value={url} 
+            className="bg-transparent flex-1 text-xs font-mono text-neon-cyan outline-none"
+          />
+          <button 
+            onClick={copyToClipboard}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors text-neon-cyan"
+          >
+            {copied ? <Check size={16} /> : <Copy size={16} />}
+          </button>
+        </div>
+
+        <button 
+          onClick={onClose}
+          className="w-full py-4 bg-neon-cyan text-brutal-black font-black rounded-xl"
+        >
+          Done
+        </button>
+      </motion.div>
+    </motion.div>
   );
 }
 
