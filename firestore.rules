@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: tournaments
+    // Fields: name (string), created_at (string)
+    //
+    // Collection: teams
+    // Fields: tournament_id (string|null), name (string), created_at (string)
+    //
+    // Collection: players
+    // Fields: team_id (string), name (string), is_captain (bool), created_at (string)
+    //
+    // Collection: matches
+    // Fields: tournament_id (string|null), team_a_id (string), team_b_id (string), 
+    //         total_overs (int), wickets (int), current_innings (int), 
+    //         status (string), created_at (string)
+    //
+    // Collection: balls
+    // Fields: match_id (string), innings_no (int), over_no (int), ball_no (int),
+    //         batsman_id (string), non_striker_id (string), bowler_id (string),
+    //         runs (int), extra_runs (int), extra_type (string|null),
+    //         wicket_type (string|null), timestamp (string)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "nabamitaparal1234@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidString(val, min, max) {
+      return val is string && val.size() >= min && val.size() <= max;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /tournaments/{tournamentId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /teams/{teamId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /players/{playerId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /matches/{matchId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /balls/{ballId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+    }
+  }
+}

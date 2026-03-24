@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "Tournament": {
+      "title": "Tournament",
+      "description": "A cricket tournament",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "created_at"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "A cricket team",
+      "type": "object",
+      "properties": {
+        "tournament_id": { "type": "string" },
+        "name": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "created_at"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A cricket player",
+      "type": "object",
+      "properties": {
+        "team_id": { "type": "string" },
+        "name": { "type": "string" },
+        "is_captain": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["team_id", "name", "created_at"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "A cricket match",
+      "type": "object",
+      "properties": {
+        "tournament_id": { "type": "string" },
+        "team_a_id": { "type": "string" },
+        "team_b_id": { "type": "string" },
+        "total_overs": { "type": "integer" },
+        "wickets": { "type": "integer" },
+        "current_innings": { "type": "integer" },
+        "status": { "type": "string", "enum": ["ongoing", "finished"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["team_a_id", "team_b_id", "total_overs", "wickets", "current_innings", "status", "created_at"]
+    },
+    "Ball": {
+      "title": "Ball",
+      "description": "A single ball in a match",
+      "type": "object",
+      "properties": {
+        "match_id": { "type": "string" },
+        "innings_no": { "type": "integer" },
+        "over_no": { "type": "integer" },
+        "ball_no": { "type": "integer" },
+        "batsman_id": { "type": "string" },
+        "non_striker_id": { "type": "string" },
+        "bowler_id": { "type": "string" },
+        "runs": { "type": "integer" },
+        "extra_runs": { "type": "integer" },
+        "extra_type": { "type": "string" },
+        "wicket_type": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["match_id", "innings_no", "over_no", "ball_no", "runs", "extra_runs", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/tournaments": { "schema": "Tournament", "description": "Collection of tournaments" },
+    "/teams": { "schema": "Team", "description": "Collection of teams" },
+    "/players": { "schema": "Player", "description": "Collection of players" },
+    "/matches": { "schema": "Match", "description": "Collection of matches" },
+    "/balls": { "schema": "Ball", "description": "Collection of balls" }
+  }
+}

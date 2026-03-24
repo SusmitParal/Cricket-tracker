@@ -5,6 +5,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from './db';
 import { 
   Trophy,
   Users, 
@@ -21,48 +23,48 @@ import {
   Copy,
   Check
 } from 'lucide-react';
-import type { Match, Ball, Player } from './types';
+import type { Match, Ball, Player, Team, Tournament } from './types';
 import History from './components/History';
 import LiveScoreboard from './components/LiveScoreboard';
 
 export default function App() {
   const [showHistory, setShowHistory] = useState(false);
-  const [matches, setMatches] = useState<Match[]>([]);
+  const matches = useLiveQuery(() => db.matches.toArray()) || [];
   const [selectedMatchId, setSelectedMatchId] = useState<number | null>(null);
   const [isLiveView, setIsLiveView] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
-  const selectedMatch = useMemo(() => 
-    matches.find(m => m.id === selectedMatchId), 
-    [matches, selectedMatchId]
-  );
+  const selectedMatch = useLiveQuery(async () => {
+    if (!selectedMatchId) return null;
+    const match = await db.matches.get(selectedMatchId);
+    if (!match) return null;
 
-  useEffect(() => {
-    if (selectedMatchId && !selectedMatch?.players) {
-      fetch(`/api/matches/${selectedMatchId}`)
-        .then(res => res.json())
-        .then(data => {
-          setMatches(prev => prev.map(m => m.id === selectedMatchId ? data : m));
-        });
-    }
-  }, [selectedMatchId, selectedMatch?.players]);
-
-  const fetchMatches = async () => {
-    try {
-      const res = await fetch('/api/matches');
-      const data = await res.json();
-      setMatches(data);
-    } catch (err) {
-      console.error('Failed to fetch matches', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchMatches();
+    // Fetch related data
+    const balls = await db.balls.where('match_id').equals(selectedMatchId).toArray();
+    const teamA = await db.teams.get(match.team_a_id);
+    const teamB = await db.teams.get(match.team_b_id);
     
+    if (teamA) {
+      teamA.players = await db.players.where('team_id').equals(teamA.id).toArray();
+    }
+    if (teamB) {
+      teamB.players = await db.players.where('team_id').equals(teamB.id).toArray();
+    }
+
+    return {
+      ...match,
+      balls,
+      team_a_name: teamA?.name || 'Team A',
+      team_b_name: teamB?.name || 'Team B',
+      players: {
+        team_a: teamA?.players || [],
+        team_b: teamB?.players || []
+      }
+    };
+  }, [selectedMatchId]);
+
+  useEffect(() => {
     const path = window.location.pathname;
     if (path.startsWith('/live/')) {
       const matchId = parseInt(path.split('/')[2]);
@@ -71,24 +73,6 @@ export default function App() {
         setIsLiveView(true);
       }
     }
-    
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}`);
-    
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'MATCH_CREATED') {
-        setMatches(prev => [data.match, ...prev]);
-      } else if (data.type === 'BALL_ADDED' || data.type === 'BALL_REMOVED') {
-        setMatches(prev => prev.map(m => 
-          m.id === Number(data.matchId) ? data.fullMatch : m
-        ));
-      } else if (data.type === 'MATCH_UPDATED') {
-        setMatches(prev => prev.map(m => m.id === data.match.id ? data.match : m));
-      }
-    };
-
-    return () => ws.close();
   }, []);
 
   if (showHistory) {
@@ -101,57 +85,83 @@ export default function App() {
   }
 
   const createMatch = async (teamAId: number, teamBId: number, overs: number, wickets: number) => {
-    const res = await fetch('/api/matches', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team_a_id: teamAId, team_b_id: teamBId, total_overs: overs, wickets }),
-    });
-    if (!res.ok) {
-      const error = await res.json();
-      console.error('Failed to create match:', error);
-      alert(`Failed to create match: ${error.error || 'Unknown error'}`);
-      return;
+    try {
+      const id = await db.matches.add({
+        tournament_id: null,
+        team_a_id: teamAId,
+        team_b_id: teamBId,
+        team_a_name: '', // Will be resolved by useLiveQuery
+        team_b_name: '',
+        total_overs: overs,
+        wickets: wickets,
+        current_innings: 1,
+        status: 'ongoing',
+        created_at: new Date().toISOString()
+      } as any);
+      setSelectedMatchId(id as number);
+      setShowSetup(false);
+    } catch (err) {
+      console.error('Failed to create match:', err);
     }
-    const newMatch = await res.json();
-    setMatches(prev => [newMatch, ...prev]);
-    setSelectedMatchId(newMatch.id);
-    setShowSetup(false);
   };
 
   const createTournament = async (tournament: any) => {
     try {
-      const res = await fetch('/api/tournaments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(tournament),
-      });
-      if (!res.ok) throw new Error('Failed to create tournament');
-      const data = await res.json();
-      
-      // Generate schedule
-      const schedRes = await fetch(`/api/tournaments/${data.id}/schedule`, { method: 'POST' });
-      if (!schedRes.ok) {
-        const error = await schedRes.json();
-        throw new Error(`Failed to generate schedule: ${error.error || 'Unknown error'}`);
+      const tournamentId = await db.tournaments.add({
+        name: tournament.name,
+        created_at: new Date().toISOString()
+      } as any);
+
+      if (tournament.teams) {
+        for (const team of tournament.teams) {
+          const teamId = await db.teams.add({
+            tournament_id: tournamentId as number,
+            name: team.name,
+            created_at: new Date().toISOString()
+          } as any);
+
+          for (const playerName of team.players) {
+            await db.players.add({
+              team_id: teamId as number,
+              name: playerName,
+              is_captain: false,
+              created_at: new Date().toISOString()
+            } as any);
+          }
+        }
       }
-      
-      alert('Tournament created and schedule generated successfully!');
+
+      alert('Tournament created successfully!');
     } catch (err) {
       console.error('Failed to create tournament:', err);
-      alert(`Failed to create tournament: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 
   const [selectedTournamentId, setSelectedTournamentId] = useState<number | null>(null);
-  const [standings, setStandings] = useState<any[]>([]);
+  const standings = useLiveQuery(async () => {
+    if (!selectedTournamentId) return [];
+    try {
+      const teams = await db.teams.where('tournament_id').equals(selectedTournamentId).toArray();
+      const matches = await db.matches.where('tournament_id').equals(selectedTournamentId).filter(m => m.status === 'finished').toArray();
 
-  useEffect(() => {
-    if (selectedTournamentId) {
-      fetch(`/api/tournaments/${selectedTournamentId}/standings`)
-        .then(res => res.json())
-        .then(data => setStandings(data));
+      return teams.map((team: any) => {
+        const teamMatches = matches.filter((m: any) => m.team_a_id === team.id || m.team_b_id === team.id);
+        const wins = matches.filter((m: any) => m.winner_id === team.id).length;
+        const losses = teamMatches.length - wins;
+        return {
+          id: team.id,
+          name: team.name,
+          played: teamMatches.length,
+          wins,
+          losses,
+          points: wins * 2
+        };
+      }).sort((a: any, b: any) => b.points - a.points || b.wins - a.wins);
+    } catch (error) {
+      console.error('Failed to fetch standings:', error);
+      return [];
     }
-  }, [selectedTournamentId]);
+  }, [selectedTournamentId]) || [];
 
   if (loading) {
     return (
@@ -173,7 +183,7 @@ export default function App() {
           <h1 className="font-serif text-6xl font-bold tracking-tighter text-neon-cyan drop-shadow-[0_0_10px_rgba(0,255,255,0.5)]">CRICKET</h1>
           <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-neon-cyan/60">Pro Team Tracker v2.0</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
           <button 
             onClick={() => setShowHistory(true)}
             className="flex items-center gap-2 border border-neon-cyan/50 text-neon-cyan px-4 py-2 rounded-full hover:bg-neon-cyan hover:text-brutal-black transition-all text-xs font-bold uppercase tracking-wider"
@@ -199,8 +209,10 @@ export default function App() {
             match={selectedMatch} 
             onBack={() => {
               setSelectedMatchId(null);
-              fetchMatches();
             }} 
+            onUpdate={(updatedMatch) => {
+              // updatedMatch is handled by Dexie's useLiveQuery
+            }}
           />
         ) : selectedMatchId ? (
           <div className="flex items-center justify-center p-20">
@@ -329,48 +341,43 @@ function MatchSetupModal({ onClose, onSubmit }: { onClose: () => void, onSubmit:
   const handleSubmit = async () => {
     try {
       // 1. Create Team A
-      const resA = await fetch('/api/teams', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: teamAName }),
-      });
-      if (!resA.ok) throw new Error('Failed to create Team A');
-      const teamA = await resA.json();
+      const teamAId = await db.teams.add({
+        name: teamAName,
+        tournament_id: null,
+        created_at: new Date().toISOString()
+      } as any);
       
       // 2. Add Team A Players
       for (const p of teamAPlayers) {
-        const res = await fetch(`/api/teams/${teamA.id}/players`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: p, is_captain: false }),
-        });
-        if (!res.ok) throw new Error('Failed to add player to Team A');
+        await db.players.add({
+          team_id: teamAId as number,
+          name: p,
+          is_captain: false,
+          created_at: new Date().toISOString()
+        } as any);
       }
 
       // 3. Create Team B
-      const resB = await fetch('/api/teams', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: teamBName }),
-      });
-      if (!resB.ok) throw new Error('Failed to create Team B');
-      const teamB = await resB.json();
+      const teamBId = await db.teams.add({
+        name: teamBName,
+        tournament_id: null,
+        created_at: new Date().toISOString()
+      } as any);
 
       // 4. Add Team B Players
       for (const p of teamBPlayers) {
-        const res = await fetch(`/api/teams/${teamB.id}/players`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: p, is_captain: false }),
-        });
-        if (!res.ok) throw new Error('Failed to add player to Team B');
+        await db.players.add({
+          team_id: teamBId as number,
+          name: p,
+          is_captain: false,
+          created_at: new Date().toISOString()
+        } as any);
       }
 
       // 5. Create Match
-      onSubmit(teamA.id, teamB.id, Number(overs), Number(wickets));
-    } catch (error) {
-      console.error('Error in handleSubmit:', error);
-      alert(`Failed to start match: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      onSubmit(teamAId as number, teamBId as number, Number(overs), Number(wickets));
+    } catch (err) {
+      console.error('Failed to setup match:', err);
     }
   };
 
@@ -566,7 +573,7 @@ function MatchSetupModal({ onClose, onSubmit }: { onClose: () => void, onSubmit:
   );
 }
 
-function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void }) {
+function MatchDashboard({ match, onBack, onUpdate }: { match: Match, onBack: () => void, onUpdate: (m: Match) => void }) {
   console.log('MatchDashboard match:', match);
   const balls = match.balls || [];
   const [showBatsmanSelect, setShowBatsmanSelect] = useState(false);
@@ -581,6 +588,7 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
   const [currentBowlerId, setCurrentBowlerId] = useState<number | null>(null);
   const [nonStrikerId, setNonStrikerId] = useState<number | null>(null);
   const [showVictory, setShowVictory] = useState(match.status === 'finished');
+  const [pendingExtra, setPendingExtra] = useState<'wide' | 'noball' | 'bye' | 'legbye' | null>(null);
 
   const { battingTeamName, bowlingTeamName, battingPlayers, bowlingPlayers } = useMemo(() => {
     let battingTeamName, bowlingTeamName, battingPlayers, bowlingPlayers;
@@ -668,49 +676,56 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
   };
 
   const handleTossComplete = async (winnerId: number, decision: 'bat' | 'bowl') => {
-    await fetch(`/api/matches/${match.id}/toss`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toss_winner_id: winnerId, toss_decision: decision }),
-    });
+    try {
+      await db.matches.update(match.id, {
+        toss_winner_id: winnerId,
+        toss_decision: decision
+      });
+    } catch (err) {
+      console.error('Failed to update toss:', err);
+    }
   };
 
   const declareResult = async () => {
-    let winnerId = null;
-    const teamABattingFirst = match.toss_decision === 'bat' ? match.toss_winner_id === match.team_a_id : match.toss_winner_id === match.team_b_id;
-    
-    const firstInningsRuns = balls.filter(b => b.innings_no === 1).reduce((sum, b) => sum + b.runs + b.extra_runs, 0);
-    const secondInningsRuns = balls.filter(b => b.innings_no === 2).reduce((sum, b) => sum + b.runs + b.extra_runs, 0);
+    try {
+      let winnerId = null;
+      const teamABattingFirst = match.toss_decision === 'bat' ? match.toss_winner_id === match.team_a_id : match.toss_winner_id === match.team_b_id;
+      
+      const firstInningsRuns = balls.filter(b => b.innings_no === 1).reduce((sum, b) => sum + b.runs + b.extra_runs, 0);
+      const secondInningsRuns = balls.filter(b => b.innings_no === 2).reduce((sum, b) => sum + b.runs + b.extra_runs, 0);
 
-    if (secondInningsRuns > firstInningsRuns) {
-      winnerId = teamABattingFirst ? match.team_b_id : match.team_a_id;
-    } else if (firstInningsRuns > secondInningsRuns) {
-      winnerId = teamABattingFirst ? match.team_a_id : match.team_b_id;
-    } else {
-      winnerId = null; // Tie
+      if (secondInningsRuns > firstInningsRuns) {
+        winnerId = teamABattingFirst ? match.team_b_id : match.team_a_id;
+      } else if (firstInningsRuns > secondInningsRuns) {
+        winnerId = teamABattingFirst ? match.team_a_id : match.team_b_id;
+      } else {
+        winnerId = null; // Tie
+      }
+
+      await db.matches.update(match.id, {
+        status: 'finished',
+        winner_id: winnerId as number
+      });
+    } catch (err) {
+      console.error('Failed to declare result:', err);
     }
-
-    await fetch(`/api/matches/${match.id}/finish`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ winner_id: winnerId }),
-    });
   };
 
   const switchInnings = async () => {
-    await fetch(`/api/matches/${match.id}/innings`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ current_innings: 2 }),
-    });
-    setCurrentBatsmanId(null);
-    setNonStrikerId(null);
-    setCurrentBowlerId(null);
-    setShowSetupModal(true);
+    try {
+      await db.matches.update(match.id, {
+        current_innings: 2
+      });
+      setCurrentBatsmanId(null);
+      setNonStrikerId(null);
+      setCurrentBowlerId(null);
+      setShowSetupModal(true);
+    } catch (err) {
+      console.error('Failed to switch innings:', err);
+    }
   };
 
   const addBall = async (ballData: Partial<Ball>) => {
-    console.log('addBall called with:', ballData, 'currentBatsmanId:', currentBatsmanId, 'currentBowlerId:', currentBowlerId);
     if (!currentBatsmanId) {
       setShowBatsmanSelect(true);
       return;
@@ -723,10 +738,9 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
     const nextBallNo = (stats.totalBalls % 6) + 1;
     const nextOverNo = Math.floor(stats.totalBalls / 6);
 
-    await fetch(`/api/matches/${match.id}/balls`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    try {
+      await db.balls.add({
+        match_id: match.id,
         innings_no: match.current_innings,
         over_no: nextOverNo,
         ball_no: nextBallNo,
@@ -736,9 +750,12 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
         wicket_type: null,
         batsman_id: currentBatsmanId,
         bowler_id: currentBowlerId,
+        timestamp: new Date().toISOString(),
         ...ballData
-      }),
-    });
+      } as any);
+    } catch (err) {
+      console.error('Failed to add ball:', err);
+    }
     
     // Handle strike rotation
     const runs = ballData.runs || 0;
@@ -769,7 +786,13 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
   };
 
   const undoLast = async () => {
-    await fetch(`/api/matches/${match.id}/balls/last`, { method: 'DELETE' });
+    try {
+      const lastBall = balls[balls.length - 1];
+      if (!lastBall) return;
+      await db.balls.delete(lastBall.id);
+    } catch (err) {
+      console.error('Failed to undo ball:', err);
+    }
   };
 
   if (!match.toss_winner_id) {
@@ -939,24 +962,81 @@ function MatchDashboard({ match, onBack }: { match: Match, onBack: () => void })
             {[0, 1, 2, 3, 4, 6].map(r => (
               <button 
                 key={r}
-                onClick={() => addBall({ runs: r })}
-                className="h-20 bg-white/5 border border-white/10 rounded-xl font-black text-3xl hover:bg-neon-cyan hover:text-brutal-black hover:border-neon-cyan transition-all shadow-lg active:scale-95"
+                onClick={() => {
+                  if (pendingExtra) {
+                    if (pendingExtra === 'wide') {
+                      addBall({ runs: 0, extra_runs: r + 1, extra_type: 'wide' });
+                    } else if (pendingExtra === 'noball') {
+                      addBall({ runs: r, extra_runs: 1, extra_type: 'noball' });
+                    } else {
+                      addBall({ runs: 0, extra_runs: r, extra_type: pendingExtra });
+                    }
+                    setPendingExtra(null);
+                  } else {
+                    addBall({ runs: r });
+                  }
+                }}
+                className={`h-20 border rounded-xl font-black text-3xl transition-all shadow-lg active:scale-95 ${
+                  pendingExtra ? 'border-neon-cyan bg-neon-cyan/20 text-neon-cyan' : 'bg-white/5 border-white/10 hover:bg-neon-cyan hover:text-brutal-black hover:border-neon-cyan'
+                }`}
               >
-                {r}
+                {pendingExtra ? `+${r}` : r}
               </button>
             ))}
             <button 
-              onClick={() => addBall({ runs: 0, extra_runs: 1, extra_type: 'wide' })}
-              className="h-20 bg-orange-500/10 border border-orange-500/50 text-orange-500 rounded-xl font-bold text-sm uppercase tracking-tighter hover:bg-orange-500 hover:text-white transition-all"
+              onClick={() => {
+                if (pendingExtra === 'wide') {
+                  addBall({ runs: 0, extra_runs: 1, extra_type: 'wide' });
+                  setPendingExtra(null);
+                } else {
+                  setPendingExtra('wide');
+                }
+              }}
+              className={`h-20 rounded-xl font-bold text-sm uppercase tracking-tighter transition-all border ${
+                pendingExtra === 'wide' ? 'bg-orange-500 text-white border-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.4)]' : 'bg-orange-500/10 border-orange-500/50 text-orange-500 hover:bg-orange-500 hover:text-white'
+              }`}
             >
               Wide
             </button>
             <button 
-              onClick={() => addBall({ runs: 0, extra_runs: 1, extra_type: 'noball' })}
-              className="h-20 bg-blue-500/10 border border-blue-500/50 text-blue-500 rounded-xl font-bold text-sm uppercase tracking-tighter hover:bg-blue-500 hover:text-white transition-all"
+              onClick={() => {
+                if (pendingExtra === 'noball') {
+                  addBall({ runs: 0, extra_runs: 1, extra_type: 'noball' });
+                  setPendingExtra(null);
+                } else {
+                  setPendingExtra('noball');
+                }
+              }}
+              className={`h-20 rounded-xl font-bold text-sm uppercase tracking-tighter transition-all border ${
+                pendingExtra === 'noball' ? 'bg-blue-500 text-white border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.4)]' : 'bg-blue-500/10 border-blue-500/50 text-blue-500 hover:bg-blue-500 hover:text-white'
+              }`}
             >
               No Ball
             </button>
+            <button 
+              onClick={() => setPendingExtra(pendingExtra ? null : 'wide')}
+              className={`h-20 rounded-xl flex items-center justify-center transition-all border ${
+                pendingExtra ? 'bg-neon-cyan text-brutal-black border-neon-cyan shadow-[0_0_15px_rgba(0,255,255,0.4)]' : 'bg-white/5 border-white/10 hover:border-neon-cyan text-neon-cyan'
+              }`}
+            >
+              <Plus size={24} />
+            </button>
+            {pendingExtra && (
+              <div className="col-span-4 grid grid-cols-2 gap-2 mt-1 animate-in fade-in slide-in-from-top-2">
+                <button 
+                  onClick={() => setPendingExtra('bye')}
+                  className={`py-2 rounded-lg font-bold text-[10px] uppercase tracking-widest border transition-all ${pendingExtra === 'bye' ? 'bg-white text-brutal-black border-white' : 'bg-white/5 border-white/10 text-white/40 hover:border-white/30'}`}
+                >
+                  Bye
+                </button>
+                <button 
+                  onClick={() => setPendingExtra('legbye')}
+                  className={`py-2 rounded-lg font-bold text-[10px] uppercase tracking-widest border transition-all ${pendingExtra === 'legbye' ? 'bg-white text-brutal-black border-white' : 'bg-white/5 border-white/10 text-white/40 hover:border-white/30'}`}
+                >
+                  Leg Bye
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex flex-col gap-2">
             <button 
