@@ -12,8 +12,12 @@ export default function History({ matches }: { matches: Match[] }) {
         ) : (
           finishedMatches.map(match => (
             <div key={match.id} className="bg-white/5 p-4 rounded-xl border border-white/10 flex justify-between items-center">
-              <div>
-                <p className="font-bold">{match.team_a_name} vs {match.team_b_name}</p>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  {match.team_a_icon && <span className="text-xl">{match.team_a_icon}</span>}
+                  <p className="font-bold">{match.team_a_name} vs {match.team_b_name}</p>
+                  {match.team_b_icon && <span className="text-xl">{match.team_b_icon}</span>}
+                </div>
                 <p className="text-xs opacity-50">{new Date(match.created_at).toLocaleDateString()}</p>
               </div>
               <div className="text-right">

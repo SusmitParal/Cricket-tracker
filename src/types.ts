@@ -3,6 +3,7 @@ export interface Player {
   team_id: string;
   name: string;
   is_captain: boolean;
+  isCaptain?: boolean;
   created_at: string;
 }
 
@@ -10,6 +11,7 @@ export interface Team {
   id: string;
   tournament_id: string | null;
   name: string;
+  icon?: string;
   created_at: string;
   players?: Player[];
 }
@@ -17,8 +19,21 @@ export interface Team {
 export interface Tournament {
   id: string;
   name: string;
+  format: 'test' | 'odi' | 't20';
+  type: 'round-robin' | 'knockout' | 'groups';
+  points_win: number;
+  points_draw: number;
+  points_loss: number;
+  min_players?: number;
+  min_wickets?: number;
+  min_teams?: number;
   created_at: string;
   teams?: Team[];
+  matches?: Match[];
+  status: 'ongoing' | 'finished';
+  winner_id?: string;
+  winner_name?: string;
+  winning_captain_name?: string;
 }
 
 export interface Ball {
@@ -47,16 +62,25 @@ export interface Match {
   team_b_id: string;
   team_a_name: string;
   team_b_name: string;
+  team_a_icon?: string;
+  team_b_icon?: string;
   tournament_name?: string;
   total_overs: number;
   wickets: number;
   current_innings: number;
+  match_type: 'test' | 'odi' | 't20';
+  day_no: number;
+  is_declared: boolean;
   toss_winner_id?: string;
   toss_decision?: 'bat' | 'bowl';
   winner_id?: string;
   status: 'ongoing' | 'finished';
+  stage?: string;
   created_at: string;
   balls?: Ball[];
+  current_striker_id?: string | null;
+  non_striker_id?: string | null;
+  current_bowler_id?: string | null;
   players?: {
     team_a: Player[];
     team_b: Player[];
